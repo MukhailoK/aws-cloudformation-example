@@ -13,6 +13,30 @@ Parameters:
       - eu-central-1
     Default: us-east-1
 
+  DBPublic:
+    Type: String
+    Description: Allow public access to db?
+    AllowedValues:
+      - true
+      - false
+    Default: false
+
+  DBMultiAZ:
+    Type: String
+    Description: Allow Multi A-Z db instance?
+    AllowedValues:
+      - true
+      - false
+    Default: false
+
+  DBName:
+    Type: String
+    Description: The database name.
+    MinLength: 3
+    MaxLength: 16
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
+
   DBUsername:
     Type: String
     Description: The database admin account username.
@@ -48,15 +72,28 @@ Resources:
         - Key: Name
           Value: travelmix
 
-  MySubnet:
+  MySubnetA:
     Type: 'AWS::EC2::Subnet'
     Properties:
       VpcId: !Ref MyVpc
       CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: 'us-west-2a'
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
           Value: travelmix
+
+  MySubnetB:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyVpc
+      CidrBlock: '10.0.2.0/24'
+      AvailabilityZone: 'us-west-2b'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: travelmix
+
 
   MySecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
@@ -201,7 +238,7 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
           Subnets:
-            - !Ref MySubnet
+            - !Ref MySubnetA
           SecurityGroups:
             - !Ref MySecurityGroup
       LoadBalancers:
@@ -223,7 +260,7 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
           Subnets:
-            - !Ref MySubnet
+            - !Ref MySubnetA
           SecurityGroups:
             - !Ref MySecurityGroup
       LoadBalancers:
@@ -245,13 +282,13 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
           Subnets:
-            - !Ref MySubnet
+            - !Ref MySubnetA  # Specify the subnet where Fargate tasks will launch
           SecurityGroups:
             - !Ref MySecurityGroup
       LoadBalancers:
         - ContainerName: 'orderContainer'
           ContainerPort: 9090
-          TargetGroupArn: !Ref OrderTargetGroup
+          TargetGroupArn: !Ref OrderTargetGroup  # Use the correct target group
       Tags:
         - Key: Name
           Value: travelmix
@@ -262,6 +299,7 @@ Resources:
       Name: 'CatalogTargetGroup'
       Port: 80
       Protocol: HTTP
+      TargetType: ip
       VpcId: !Ref MyVpc
       Tags:
         - Key: Name
@@ -273,17 +311,7 @@ Resources:
       Name: 'GeneralTargetGroup'
       Port: 8080
       Protocol: HTTP
-      VpcId: !Ref MyVpc
-      Tags:
-        - Key: Name
-          Value: travelmix
-
-  OrderTargetGroup:
-    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
-    Properties:
-      Name: 'OrderTargetGroup'
-      Port: 9090
-      Protocol: HTTP
+      TargetType: ip
       VpcId: !Ref MyVpc
       Tags:
         - Key: Name
@@ -333,7 +361,7 @@ Resources:
       ServiceNamespace: ecs
 
   OrderAutoScalingPolicy:
-    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
     Properties:
       PolicyName: 'OrderScalingPolicy'
       PolicyType: 'TargetTrackingScaling'
@@ -344,7 +372,7 @@ Resources:
           PredefinedMetricType: ECSServiceAverageCPUUtilization
 
   OrderAutoScalingTarget:
-    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
     Properties:
       MaxCapacity: 4
       MinCapacity: 1
@@ -353,29 +381,67 @@ Resources:
       ScalableDimension: ecs:service:DesiredCount
       ServiceNamespace: ecs
 
+  OrderTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      Name: 'OrderTargetGroup'
+      Port: 9090
+      Protocol: HTTP
+      TargetType: ip  # Specify 'ip' for Fargate tasks
+      VpcId: !Ref MyVpc
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  OrderLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Name: 'OrderLoadBalancer'
+      Subnets:
+        - !Ref MySubnetA  # Specify the subnet where the load balancer should reside
+      SecurityGroups:
+        - !Ref MySecurityGroup
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  OrderListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref OrderTargetGroup
+      LoadBalancerArn: !Ref OrderLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
   MyDBInstance:
-    Type: 'AWS::RDS::DBInstance'
+    Type: AWS::RDS::DBInstance
     Properties:
       DBInstanceClass: db.t3.micro
       AllocatedStorage: '20'
       Engine: postgres
-      EngineVersion: '13.3'
       MasterUsername: !Ref DBUsername
       MasterUserPassword: !Ref DBPassword
+      DBName: !Ref DBName
       DBInstanceIdentifier: 'travelmix-db-instance'
       VPCSecurityGroups:
         - !GetAtt MySecurityGroup.GroupId
       DBSubnetGroupName: !Ref MyDBSubnetGroup
+      PubliclyAccessible: !Ref DBPublic
+      MultiAZ: !Ref DBMultiAZ
       Tags:
         - Key: Name
           Value: travelmix
+
 
   MyDBSubnetGroup:
     Type: 'AWS::RDS::DBSubnetGroup'
     Properties:
       DBSubnetGroupDescription: 'Subnet group for travelmix RDS instance'
       SubnetIds:
-        - !Ref MySubnet
+        - !Ref MySubnetA
+        - !Ref MySubnetB
       Tags:
         - Key: Name
           Value: travelmix
