@@ -1,0 +1,381 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  AWSRegion:
+    Type: String
+    Description: Choose AWS Region
+    AllowedValues:
+      - us-east-1
+      - us-east-2
+      - us-west-1
+      - us-west-2
+      - eu-west-1
+      - eu-west-2
+      - eu-central-1
+    Default: us-east-1
+
+  DBUsername:
+    Type: String
+    Description: The database admin account username.
+    MinLength: 1
+    MaxLength: 16
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
+
+  DBPassword:
+    Type: String
+    Description: The database admin account password.
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    AllowedPattern: '[a-zA-Z0-9]*'
+    ConstraintDescription: must contain only alphanumeric characters.
+
+Resources:
+  MyEcsCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  MyVpc:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  MySubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyVpc
+      CidrBlock: '10.0.1.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  MySecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Allow HTTP traffic'
+      VpcId: !Ref MyVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 9090
+          ToPort: 9090
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  MyEcsTaskExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ecsTaskExecutionRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  CatalogEcrRepository:
+    Type: 'AWS::ECR::Repository'
+    Properties:
+      RepositoryName: 'travelmix-catalog'
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  GeneralEcrRepository:
+    Type: 'AWS::ECR::Repository'
+    Properties:
+      RepositoryName: 'travelmix-general'
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  OrderEcrRepository:
+    Type: 'AWS::ECR::Repository'
+    Properties:
+      RepositoryName: 'travelmix-order'
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  CatalogTaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties:
+      Family: 'catalogTaskDefinition'
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt MyEcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: 'catalogContainer'
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWSRegion}.amazonaws.com/travelmix-catalog:latest'
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  GeneralTaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties:
+      Family: 'generalTaskDefinition'
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt MyEcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: 'generalContainer'
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWSRegion}.amazonaws.com/travelmix-general:latest'
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  OrderTaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties:
+      Family: 'orderTaskDefinition'
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt MyEcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: 'orderContainer'
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWSRegion}.amazonaws.com/travelmix-order:latest'
+          Essential: true
+          PortMappings:
+            - ContainerPort: 9090
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  CatalogService:
+    Type: 'AWS::ECS::Service'
+    Properties:
+      Cluster: !Ref MyEcsCluster
+      TaskDefinition: !Ref CatalogTaskDefinition
+      DesiredCount: 1
+      LaunchType: 'FARGATE'
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref MySubnet
+          SecurityGroups:
+            - !Ref MySecurityGroup
+      LoadBalancers:
+        - ContainerName: 'catalogContainer'
+          ContainerPort: 80
+          TargetGroupArn: !Ref CatalogTargetGroup
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  GeneralService:
+    Type: 'AWS::ECS::Service'
+    Properties:
+      Cluster: !Ref MyEcsCluster
+      TaskDefinition: !Ref GeneralTaskDefinition
+      DesiredCount: 1
+      LaunchType: 'FARGATE'
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref MySubnet
+          SecurityGroups:
+            - !Ref MySecurityGroup
+      LoadBalancers:
+        - ContainerName: 'generalContainer'
+          ContainerPort: 8080
+          TargetGroupArn: !Ref GeneralTargetGroup
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  OrderService:
+    Type: 'AWS::ECS::Service'
+    Properties:
+      Cluster: !Ref MyEcsCluster
+      TaskDefinition: !Ref OrderTaskDefinition
+      DesiredCount: 1
+      LaunchType: 'FARGATE'
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref MySubnet
+          SecurityGroups:
+            - !Ref MySecurityGroup
+      LoadBalancers:
+        - ContainerName: 'orderContainer'
+          ContainerPort: 9090
+          TargetGroupArn: !Ref OrderTargetGroup
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  CatalogTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      Name: 'CatalogTargetGroup'
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref MyVpc
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  GeneralTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      Name: 'GeneralTargetGroup'
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref MyVpc
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  OrderTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      Name: 'OrderTargetGroup'
+      Port: 9090
+      Protocol: HTTP
+      VpcId: !Ref MyVpc
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  CatalogAutoScalingPolicy:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: 'CatalogScalingPolicy'
+      PolicyType: 'TargetTrackingScaling'
+      ScalingTargetId: !Ref CatalogAutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+
+
+  CatalogAutoScalingTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MaxCapacity: 4
+      MinCapacity: 1
+      ResourceId: !Join [ "", [ "service/", !Ref MyEcsCluster, "/", !GetAtt CatalogService.Name ] ]
+      RoleARN: !GetAtt MyEcsTaskExecutionRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  GeneralAutoScalingPolicy:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: 'GeneralScalingPolicy'
+      PolicyType: 'TargetTrackingScaling'
+      ScalingTargetId: !Ref GeneralAutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+
+  GeneralAutoScalingTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MaxCapacity: 4
+      MinCapacity: 1
+      ResourceId: !Join [ "", [ "service/", !Ref MyEcsCluster, "/", !GetAtt GeneralService.Name ] ]
+      RoleARN: !GetAtt MyEcsTaskExecutionRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  OrderAutoScalingPolicy:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: 'OrderScalingPolicy'
+      PolicyType: 'TargetTrackingScaling'
+      ScalingTargetId: !Ref OrderAutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+
+  OrderAutoScalingTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MaxCapacity: 4
+      MinCapacity: 1
+      ResourceId: !Join [ "", [ "service/", !Ref MyEcsCluster, "/", !GetAtt OrderService.Name ] ]
+      RoleARN: !GetAtt MyEcsTaskExecutionRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  MyDBInstance:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: '20'
+      Engine: postgres
+      EngineVersion: '13.3'
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBInstanceIdentifier: 'travelmix-db-instance'
+      VPCSecurityGroups:
+        - !GetAtt MySecurityGroup.GroupId
+      DBSubnetGroupName: !Ref MyDBSubnetGroup
+      Tags:
+        - Key: Name
+          Value: travelmix
+
+  MyDBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: 'Subnet group for travelmix RDS instance'
+      SubnetIds:
+        - !Ref MySubnet
+      Tags:
+        - Key: Name
+          Value: travelmix

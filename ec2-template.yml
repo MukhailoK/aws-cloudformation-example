@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS CloudFormation for Gimmonix API Service CI/CD Pipeline
+
+Resources:
+  ECRRepository:
+    Type: 'AWS::ECR::Repository'
+    Properties:
+      RepositoryName: gimmonix-api-service
+
+  ECSCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: gimmonix-cluster
+
+  ECSService:
+    Type: 'AWS::ECS::Service'
+    Properties:
+      ServiceName: gimmonix-service
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref ECSTaskDefinition
+      DesiredCount: 1
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+
+  ECSTaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties:
+      Family: GimmonixTaskDefinition
+      ContainerDefinitions:
+        - Name: GimmonixContainer
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/Gimmonix_API_Service:latest'
+          Memory: 512
+          Cpu: 256
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              HostPort: 80
+
+  RDSDBInstance:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      DBInstanceClass: 'db.t3.micro'
+      AllocatedStorage: '20'
+      Engine: 'postgres'
+      MasterUsername: 'pgadmin'
+      MasterUserPassword: 'root1234'
+      DBName: 'travelmix_stg'
+      BackupRetentionPeriod: '7'
+      MultiAZ: false
+      PubliclyAccessible: true
+
+
+Outputs:
+  ECRRepositoryURI:
+    Description: "ECR Repository URI"
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/Gimmonix_API_Service:latest'
